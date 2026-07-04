@@ -1,0 +1,11 @@
+aiogram>=3.4
+APScheduler>=3.10
+python-dotenv>=1.0
+openpyxl>=3.1
+# Для просмотров/реакций/комментариев через MTProto:
+telethon>=1.34
+# Для работы Telethon через прокси (если Telegram заблокирован):
+python-socks[asyncio]>=2.4
+# Для скрапинга веб-версии (обход my.telegram.org):
+playwright>=1.40
+# ПОСЛЕ установки выполните один раз: playwright install chromium
