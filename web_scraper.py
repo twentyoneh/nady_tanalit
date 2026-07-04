@@ -56,6 +56,8 @@ SEL_MESSAGE = ".Message.message-list-item"
 SEL_VIEWS = ".message-views"
 SEL_REACTION = ".message-reaction"
 SEL_COMMENTS = ".CommentButton .label"
+# счётчик подписчиков в шапке открытого канала ("3 subscribers")
+SEL_SUB_COUNT = ".ChatInfo .status .group-status, .ChatInfo .group-status, .group-status"
 
 
 def init_db() -> None:
@@ -75,6 +77,15 @@ def init_db() -> None:
         con.execute("ALTER TABLE post_metrics ADD COLUMN link TEXT")
     except sqlite3.OperationalError:
         pass
+    # снимки числа подписчиков (динамику строит export_excel.py)
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS subscribers (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               channel TEXT NOT NULL,
+               members INTEGER,
+               taken_at TEXT NOT NULL
+           )"""
+    )
     con.commit()
     con.close()
 
@@ -91,6 +102,37 @@ def save_metric(row: dict) -> None:
     )
     con.commit()
     con.close()
+
+
+def save_subscribers(channel: str, members, taken_at: str) -> None:
+    con = sqlite3.connect(DB_PATH)
+    con.execute(
+        "INSERT INTO subscribers (channel, members, taken_at) VALUES (?,?,?)",
+        (channel, members, taken_at),
+    )
+    con.commit()
+    con.close()
+
+
+def _members_num(text):
+    """'1 234 subscribers' / '1.2K subscribers' / '3 подписчика' -> int.
+    Пробел/запятая в точном числе — разделитель разрядов; k/тыс/m/млн — сокращение."""
+    if not text:
+        return None
+    t = str(text).strip().lower()
+    m = re.search(r"(\d[\d\s.,]*)\s*(k|к|тыс|m|млн)?", t)   # число ОБЯЗАНО с цифры
+    if not m:
+        return None
+    raw, suf = m.group(1).strip(), m.group(2)
+    if suf:                                     # сокращённый вид: 1.2K / 12,3 тыс
+        try:
+            val = float(raw.replace(" ", "").replace(",", "."))
+        except ValueError:
+            return None
+        val *= 1000 if suf in ("k", "к", "тыс") else 1_000_000
+        return int(val)
+    digits = re.sub(r"[^\d]", "", raw)          # точный вид: убираем разделители
+    return int(digits) if digits else None
 
 
 def _num(text):
@@ -215,6 +257,16 @@ async def scrape_channel(page, name: str) -> None:
             print(f"  [!] пост {i}: {exc}")
 
 
+async def snapshot_subscribers(page, name: str) -> None:
+    """Снимает число подписчиков из шапки открытого канала -> таблица subscribers."""
+    now = datetime.now(timezone.utc).isoformat()
+    raw = await _text_or_none(page.locator(SEL_SUB_COUNT))
+    members = _members_num(raw)
+    save_subscribers(name, members, now)
+    print(f"  {name}: подписчиков = "
+          f"{members if members is not None else '—'} ({raw or 'не найдено'})")
+
+
 async def dump(page) -> None:
     """Сохраняет HTML для отладки. Канал откройте ВРУЧНУЮ, затем Enter."""
     loop = asyncio.get_event_loop()
@@ -303,6 +355,7 @@ async def main() -> None:
         for name in CHANNEL_NAMES:
             print(f"Канал: {name}")
             if await open_channel(page, name):
+                await snapshot_subscribers(page, name)      # подписчики (приоритет)
                 await scrape_channel(page, name)
             await page.keyboard.press("Escape")     # выйти из поиска
             await page.wait_for_timeout(800)

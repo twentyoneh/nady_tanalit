@@ -46,6 +46,64 @@ def _table_has_rows(con, name: str) -> bool:
     return con.execute(f"SELECT 1 FROM {name} LIMIT 1").fetchone() is not None
 
 
+def _export_followers(con, wb) -> None:
+    """Лист «Подписки-отписки»: joined / left / чистый прирост по дням."""
+    rows = con.execute(
+        """SELECT channel, day,
+             MAX(CASE WHEN series LIKE '%Joined%' OR series LIKE '%одписал%'
+                      THEN value END) AS joined,
+             MAX(CASE WHEN series LIKE '%Left%'   OR series LIKE '%тписал%'
+                      THEN value END) AS left_
+           FROM channel_stats WHERE graph='followers'
+           GROUP BY channel, day ORDER BY channel, day""").fetchall()
+    if not rows:
+        return
+    ws = wb.create_sheet("Подписки-отписки")
+    ws.append(["Канал", "Дата", "Подписки", "Отписки", "Чистый прирост"])
+    for r in rows:
+        j, l = r["joined"] or 0, r["left_"] or 0
+        ws.append([r["channel"], r["day"], j, l, j - l])
+    _style_header(ws)
+    _autosize(ws)
+
+
+def _export_sources(con, wb) -> None:
+    """Лист «Источники подписок»: день × источник (сводная)."""
+    rows = con.execute(
+        """SELECT channel, day, series, value FROM channel_stats
+           WHERE graph='new_followers_by_source'
+           ORDER BY channel, day""").fetchall()
+    if not rows:
+        return
+    sources = sorted({r["series"] for r in rows})
+    table: dict = {}
+    for r in rows:
+        table.setdefault((r["channel"], r["day"]), {})[r["series"]] = r["value"]
+    ws = wb.create_sheet("Источники подписок")
+    ws.append(["Канал", "Дата"] + sources + ["Всего"])
+    for (ch, day), vals in table.items():
+        line = [vals.get(s, 0) or 0 for s in sources]
+        ws.append([ch, day] + line + [sum(line)])
+    _style_header(ws)
+    _autosize(ws)
+
+
+def _export_growth(con, wb) -> None:
+    """Лист «Рост канала»: размер канала по дням."""
+    rows = con.execute(
+        """SELECT channel, day, SUM(value) AS total FROM channel_stats
+           WHERE graph='growth' GROUP BY channel, day
+           ORDER BY channel, day""").fetchall()
+    if not rows:
+        return
+    ws = wb.create_sheet("Рост канала")
+    ws.append(["Канал", "Дата", "Подписчиков"])
+    for r in rows:
+        ws.append([r["channel"], r["day"], r["total"]])
+    _style_header(ws)
+    _autosize(ws)
+
+
 def export(db_path: str = DB_PATH, out_path: str = "stats_export.xlsx",
            show_all: bool = False) -> str:
     con = sqlite3.connect(db_path)
@@ -120,6 +178,12 @@ def export(db_path: str = DB_PATH, out_path: str = "stats_export.xlsx",
                         (p["text"] or "")[:200], p["posted_at"]])
         _style_header(ws3)
         _autosize(ws3)
+
+    # === Подписки / отписки / источники (channel_stats, stats_scraper.py) ===
+    if _table_has_rows(con, "channel_stats"):
+        _export_followers(con, wb)
+        _export_sources(con, wb)
+        _export_growth(con, wb)
 
     if not wb.sheetnames:                      # совсем нет данных
         ws = wb.create_sheet("Нет данных")

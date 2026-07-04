@@ -8,4 +8,4 @@ telethon>=1.34
 python-socks[asyncio]>=2.4
 # Для скрапинга веб-версии (обход my.telegram.org):
 playwright>=1.40
-# ПОСЛЕ установки выполните один раз: playwright install chromium
+# ПОСЛЕ установки выполните один раз: python3 -m playwright install chromium
